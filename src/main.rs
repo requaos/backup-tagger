@@ -1,10 +1,17 @@
-use chrono::DateTime;
 use chrono::{Duration, Utc};
-use clap::{arg, command, Arg, Command};
+use clap::{command, Arg};
+use color_eyre::eyre::ContextCompat;
+use color_eyre::{eyre::Report, eyre::WrapErr, Section};
 use cron_parser::parse;
 use std::env;
+use tracing::{info, instrument};
 
-fn main() {
+#[instrument]
+fn main() -> Result<(), Report> {
+    install_tracing();
+    color_eyre::install()?;
+
+    info!("Processing CLI flags");
     let matches = command!() // requires `cargo` feature
         .propagate_version(true)
         .about("Backup TiKV/SurrealDB S3 Tags")
@@ -33,15 +40,62 @@ fn main() {
 
     let every_n_hours = if let Some(value) = matches.get_one::<String>("nHours") {
         value
-    } else {&String::from("4")};
+    } else {
+        &String::from("4")
+    };
     let minutes_offset = if let Some(value) = matches.get_one::<String>("mOffset") {
         value
-    } else {&String::from("30")};
+    } else {
+        &String::from("30")
+    };
     let lag_windows_in_minutes = if let Some(value) = matches.get_one::<String>("lagWindow") {
         value
-    } else {&String::from("20")};
+    } else {
+        &String::from("20")
+    };
     // (cron-expr, tag, match-end-of-period)
+    let checks = periods(minutes_offset, every_n_hours);
 
+    let now = Utc::now();
+    // Need to subtract a few minutes to catch the current trigger.
+    // 1/4 of the lag window feels right.
+    let lag = lag_windows_in_minutes.parse()?;
+    let now_comparison_value = now
+        .checked_sub_signed(Duration::minutes(lag / 4))
+        .wrap_err("Unable to apply jitter to current UTC timestamp")
+        .suggestion("Check the system clock")?;
+
+    let mut tags: Vec<String> = Vec::new();
+    for check in checks {
+        if let Ok(next) = parse(check.0.as_str(), &now_comparison_value) {
+            let diff = if check.2 {
+                next.checked_sub_signed(Duration::days(1))
+                    .wrap_err("Unable to adjust next matching run time for period end")
+                    .suggestion("Check the system clock")?
+            } else {
+                next
+            } - now;
+            if diff.num_seconds().abs() < lag {
+                tags.push(check.1.clone());
+            }
+            println!(
+                "- {} when: {} match: {}",
+                check.1,
+                next.to_rfc3339(),
+                diff.num_seconds().abs() < lag
+            );
+        }
+    }
+
+    let output = format!(
+        "{{\"TagSet\":[{{\"Key\":\"standard\",\"Value\":\"1\"}}{}]}}",
+        tags.join("")
+    );
+    println!("{}", output);
+    Ok(())
+}
+
+fn periods(minutes_offset: &String, every_n_hours: &String) -> Vec<(String,String,bool)> {
     // always tag as standard, so manual runs get tagged for lifecycle rules
     // let standard = (
     //     format!("{} 0/{} * * *", minutes_offset, every_n_hours),
@@ -73,36 +127,22 @@ fn main() {
         String::from(",{\"Key\":\"yearly\",\"Value\":\"1\"}"),
         true,
     );
-    let checks: Vec<(String, String, bool)> = vec![nightly, weekly, monthly, quarterly, yearly];
-    let now = Utc::now();
-    // Need to subtract a few minutes to catch the current trigger.
-    // 1/4 of the lag window feels right.
-    let lag = lag_windows_in_minutes.parse().unwrap();
-    let now_comparison_value = now.checked_sub_signed(Duration::minutes(lag / 4)).unwrap();
+    return vec![nightly, weekly, monthly, quarterly, yearly];
+}
 
-    let mut tags: Vec<String> = Vec::new();
-    for check in checks {
-        if let Ok(next) = parse(check.0.as_str(), &now_comparison_value) {
-            let diff = if check.2 {
-                next.checked_sub_signed(Duration::days(1)).unwrap()
-            } else {
-                next
-            } - now;
-            if diff.num_seconds().abs() < lag {
-                tags.push(check.1.clone());
-            }
-            println!(
-                "- {} when: {} match: {}",
-                check.1,
-                next.to_rfc3339(),
-                diff.num_seconds().abs() < lag
-            );
-        }
-    }
+fn install_tracing() {
+    use tracing_error::ErrorLayer;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::{fmt, EnvFilter};
 
-    let output = format!(
-        "{{\"TagSet\":[{{\"Key\":\"standard\",\"Value\":\"1\"}}{}]}}",
-        tags.join("")
-    );
-    println!("{}", output);
+    let fmt_layer = fmt::layer().with_target(false);
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer)
+        .with(ErrorLayer::default())
+        .init();
 }
