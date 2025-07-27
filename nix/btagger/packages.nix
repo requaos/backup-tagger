@@ -18,6 +18,7 @@
       "${self}/Cargo.toml"
       "${self}/src"
     ];
+    RUSTFLAGS = "--cfg tracing_unstable";
 
     strictDeps = true;
   };

@@ -264,6 +264,7 @@ fn surrealdb_backup(
     bin_path: String,
     bucket_name: String,
     namespace: String,
+    database: String,
     address: String,
     password: String,
     tags: String,
@@ -278,7 +279,7 @@ fn surrealdb_backup(
         .arg("-u root")
         .arg(format!("-p {}", password))
         .arg(format!("--namespace {}", namespace))
-        .arg("--database calamu")
+        .arg(format!("--database {}", database))
         .arg("-")
         .stdout(Stdio::piped())
         .spawn()
