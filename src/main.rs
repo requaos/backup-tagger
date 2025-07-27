@@ -14,16 +14,20 @@ use valuable::Valuable;
 #[command(version, about, long_about = None)]
 struct Args {
     /// Matching every n hours
-    #[arg(short, long, default_value_t = String::from("4"))]
-    every_n_hours: String,
+    #[arg(short, long, default_value_t = 4)]
+    every_n_hours: i64,
 
     /// Minutes forward from the top of the hour to offset match by
-    #[arg(short, long, default_value_t = String::from("30"))]
-    minutes_offset: String,
+    #[arg(short, long, default_value_t = 30)]
+    hour_offset_in_minutes: i64,
+
+    /// Hours forward from midnight to offset match by
+    #[arg(short, long, default_value_t = 0)]
+    day_offset_in_hours: i64,
 
     /// Matching window for clock skew and/or job trigger delay
-    #[arg(short, long, default_value_t = String::from("20"))]
-    lag_window_in_minutes: String,
+    #[arg(short, long, default_value_t = 20)]
+    lag_window_in_minutes: i64,
 }
 
 #[derive(Serialize, Valuable)]
@@ -46,18 +50,21 @@ fn main() -> Result<(), Report> {
 
     info!("Processing CLI flags");
     let args = Args::parse();
-    let lag = args
-        .lag_window_in_minutes
-        .parse()
-        .wrap_err("Unable to parse lag-window-in-minutes argument value")?;
-    let checks = periods(&args.minutes_offset, &args.every_n_hours);
+    let checks = periods(
+        args.day_offset_in_hours,
+        args.hour_offset_in_minutes,
+        args.every_n_hours,
+    );
 
-    info!("Capturing current UTC time and adjusting within lag window");
     let now = Utc::now();
+    info!(
+        "Capturing current UTC time and adjusting within lag window: {}",
+        now.to_rfc3339()
+    );
     // Need to subtract a few minutes to catch the current trigger.
     // 1/4 of the lag window feels right.
     let now_comparison_value = now
-        .checked_sub_signed(Duration::minutes(lag / 4))
+        .checked_sub_signed(Duration::minutes(args.lag_window_in_minutes / 4))
         .wrap_err("Unable to apply jitter to current UTC timestamp")
         .suggestion("Check the system clock")?;
 
@@ -71,17 +78,18 @@ fn main() -> Result<(), Report> {
     info!("Processing list of tag checks");
     for check in checks {
         if let Ok(next) = parse(check.0.as_str(), &now_comparison_value) {
-            let diff = if check.2 {
+            let next_when = if check.2 {
                 next.checked_sub_signed(Duration::days(1))
                     .wrap_err("Unable to adjust next matching run time for period end")
                     .suggestion("Check the system clock")?
             } else {
                 next
-            } - now;
-            if diff.num_seconds().abs() < lag {
+            };
+            let diff = next_when - now;
+            if diff.num_seconds().abs() < (args.lag_window_in_minutes * 60) {
                 tags.push(check.1.clone());
             }
-            info!(target: "match_attempt_results", tag = check.1.as_value(), when = next.to_rfc3339(), matched = diff.num_seconds().abs() < lag);
+            info!(target: "match_attempt_results", tag = check.1.as_value(), when = next_when.to_rfc3339(), matched = diff.num_seconds().abs() < args.lag_window_in_minutes);
         }
     }
 
@@ -91,57 +99,83 @@ fn main() -> Result<(), Report> {
     Ok(())
 }
 
-fn periods(minutes_offset: &String, every_n_hours: &String) -> Vec<(String, Tag, bool)> {
+fn periods(
+    day_offset_in_hours: i64,
+    hour_offset_in_minutes: i64,
+    every_n_hours: i64,
+) -> Vec<(String, Tag, bool)> {
     // always tag as standard, so manual runs get tagged for lifecycle rules
     // let standard = (
-    //     format!("{} 0/{} * * *", minutes_offset, every_n_hours),
+    //     format!("{} {}/{} * * *", hour_offset_in_minutes, day_offset_in_hours, every_n_hours),
     //     Tag {
     //         key: String::from("standard"),
     //         value: String::from("1"),
     //     },
     //     false,
     // );
-    let nightly = (
-        format!("{} {} * * *", minutes_offset, every_n_hours),
-        Tag {
-            key: String::from("nightly"),
-            value: String::from("1"),
-        },
-        false,
-    );
-    let weekly = (
-        format!("{} {} * * 6", minutes_offset, every_n_hours),
-        Tag {
-            key: String::from("weekly"),
-            value: String::from("1"),
-        },
-        false,
-    );
-    let monthly = (
-        format!("{} {} 1 * *", minutes_offset, every_n_hours),
-        Tag {
-            key: String::from("monthly"),
-            value: String::from("1"),
-        },
-        true,
-    );
-    let quarterly = (
-        format!("{} {} 1 */3 *", minutes_offset, every_n_hours),
-        Tag {
-            key: String::from("quarterly"),
-            value: String::from("1"),
-        },
-        true,
-    );
-    let yearly = (
-        format!("{} {} 1 1 *", minutes_offset, every_n_hours),
-        Tag {
-            key: String::from("yearly"),
-            value: String::from("1"),
-        },
-        true,
-    );
-    return vec![nightly, weekly, monthly, quarterly, yearly];
+
+    return vec![
+        (
+            format!(
+                "{} {} * * *",
+                hour_offset_in_minutes,
+                every_n_hours + day_offset_in_hours
+            ),
+            Tag {
+                key: String::from("nightly"),
+                value: String::from("1"),
+            },
+            false,
+        ),
+        (
+            format!(
+                "{} {} * * 6",
+                hour_offset_in_minutes,
+                every_n_hours + day_offset_in_hours
+            ),
+            Tag {
+                key: String::from("weekly"),
+                value: String::from("1"),
+            },
+            false,
+        ),
+        (
+            format!(
+                "{} {} 1 * *",
+                hour_offset_in_minutes,
+                every_n_hours + day_offset_in_hours
+            ),
+            Tag {
+                key: String::from("monthly"),
+                value: String::from("1"),
+            },
+            true,
+        ),
+        (
+            format!(
+                "{} {} 1 */3 *",
+                hour_offset_in_minutes,
+                every_n_hours + day_offset_in_hours
+            ),
+            Tag {
+                key: String::from("quarterly"),
+                value: String::from("1"),
+            },
+            true,
+        ),
+        (
+            format!(
+                "{} {} 1 1 *",
+                hour_offset_in_minutes,
+                every_n_hours + day_offset_in_hours
+            ),
+            Tag {
+                key: String::from("yearly"),
+                value: String::from("1"),
+            },
+            true,
+        ),
+    ];
 }
 
 #[derive(Debug, Deserialize)]
