@@ -19,7 +19,7 @@ struct Args {
 
     /// Minutes forward from the top of the hour to offset match by
     #[arg(short, long, default_value_t = 30)]
-    hour_offset_in_minutes: i64,
+    minutes_offset_from_hour: i64,
 
     /// Hours forward from midnight to offset match by
     #[arg(short, long, default_value_t = 0)]
@@ -52,7 +52,7 @@ fn main() -> Result<(), Report> {
     let args = Args::parse();
     let checks = periods(
         args.day_offset_in_hours,
-        args.hour_offset_in_minutes,
+        args.minutes_offset_from_hour,
         args.every_n_hours,
     );
 
@@ -101,12 +101,12 @@ fn main() -> Result<(), Report> {
 
 fn periods(
     day_offset_in_hours: i64,
-    hour_offset_in_minutes: i64,
+    minutes_offset_from_hour: i64,
     every_n_hours: i64,
 ) -> Vec<(String, Tag, bool)> {
     // always tag as standard, so manual runs get tagged for lifecycle rules
     // let standard = (
-    //     format!("{} {}/{} * * *", hour_offset_in_minutes, day_offset_in_hours, every_n_hours),
+    //     format!("{} {}/{} * * *", minutes_offset_from_hour, day_offset_in_hours, every_n_hours),
     //     Tag {
     //         key: String::from("standard"),
     //         value: String::from("1"),
@@ -118,7 +118,7 @@ fn periods(
         (
             format!(
                 "{} {} * * *",
-                hour_offset_in_minutes,
+                minutes_offset_from_hour,
                 every_n_hours + day_offset_in_hours
             ),
             Tag {
@@ -130,7 +130,7 @@ fn periods(
         (
             format!(
                 "{} {} * * 6",
-                hour_offset_in_minutes,
+                minutes_offset_from_hour,
                 every_n_hours + day_offset_in_hours
             ),
             Tag {
@@ -142,7 +142,7 @@ fn periods(
         (
             format!(
                 "{} {} 1 * *",
-                hour_offset_in_minutes,
+                minutes_offset_from_hour,
                 every_n_hours + day_offset_in_hours
             ),
             Tag {
@@ -154,7 +154,7 @@ fn periods(
         (
             format!(
                 "{} {} 1 */3 *",
-                hour_offset_in_minutes,
+                minutes_offset_from_hour,
                 every_n_hours + day_offset_in_hours
             ),
             Tag {
@@ -166,7 +166,7 @@ fn periods(
         (
             format!(
                 "{} {} 1 1 *",
-                hour_offset_in_minutes,
+                minutes_offset_from_hour,
                 every_n_hours + day_offset_in_hours
             ),
             Tag {
@@ -399,9 +399,9 @@ fn install_tracing() {
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::{fmt, EnvFilter};
 
-    let fmt_layer = fmt::layer().with_target(false);
+    let fmt_layer = fmt::layer().with_writer(|| std::io::stderr()).with_target(false);
     let filter_layer = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
+        .or_else(|_| EnvFilter::try_new("error"))
         .unwrap();
 
     tracing_subscriber::registry()
