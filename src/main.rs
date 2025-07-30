@@ -1,5 +1,5 @@
 use chrono::{DateTime, Duration, Utc};
-use clap::{command, Arg, Parser};
+use clap::{command, Arg, Parser, Subcommand};
 use color_eyre::eyre::{ContextCompat, Result};
 use color_eyre::{eyre::Report, eyre::WrapErr, Section};
 use cron_parser::parse;
@@ -12,22 +12,96 @@ use valuable::Valuable;
 /// Backup TiKV/SurrealDB S3 Tags
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
+#[command(propagate_version = true)]
 struct Args {
     /// Matching every n hours
-    #[arg(short, long, default_value_t = 4)]
+    #[arg(short = 'n', long, default_value_t = 4, global=true)]
     every_n_hours: i64,
 
     /// Minutes forward from the top of the hour to offset match by
-    #[arg(short, long, default_value_t = 30)]
+    #[arg(short, long, default_value_t = 30, global=true)]
     minutes_offset_from_hour: i64,
 
     /// Hours forward from midnight to offset match by
-    #[arg(short, long, default_value_t = 0)]
+    #[arg(short = 'h', long, default_value_t = 0, global=true)]
     day_offset_in_hours: i64,
 
     /// Matching window for clock skew and/or job trigger delay
-    #[arg(short, long, default_value_t = 20)]
+    #[arg(short, long, default_value_t = 20, global=true)]
     lag_window_in_minutes: i64,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// SurrealDB backup command.
+    Surrealdb {
+        /// Path containing 'bin/aws', 'bin/zstd' and 'bin/surreal'.
+        #[arg(short, long)]
+        bin_path: String,
+
+        /// Backup target bucket name.
+        #[arg(short = 'B', long)]
+        bucket_name: String,
+
+        /// S3 service endpoint address. Leave unspecified to use host defaults.
+        #[arg(short = 'e', long)]
+        aws_endpoint: String,
+
+        /// S3 access key ID. Leave unspecified to use host defaults.
+        #[arg(short = 'i', long)]
+        aws_id: String,
+
+        /// S3 secret access Key. Leave unspecified to use host defaults.
+        #[arg(short = 'k', long)]
+        aws_key: String,
+
+        /// SurrealDB namespace to backup.
+        #[arg(short = 'N', long)]
+        namespace: String,
+
+        /// SurrealDB database to backup.
+        #[arg(short, long)]
+        database: String,
+
+        /// SurrealDB server address.
+        #[arg(short, long)]
+        address: String,
+
+        /// SurrealDB server password.
+        #[arg(short, long)]
+        password: String,
+    },
+    /// TiKV backup command.
+    Tikv {
+        /// Path containing 'bin/aws' and 'bin/tikv-br'.
+        #[arg(short, long)]
+        bin_path: String,
+
+        /// Backup target bucket name.
+        #[arg(short = 'B', long)]
+        bucket_name: String,
+
+        /// S3 service endpoint address. Leave unspecified to use host defaults.
+        #[arg(short = 'e', long)]
+        aws_endpoint: String,
+
+        /// S3 access key ID. Leave unspecified to use host defaults.
+        #[arg(short = 'i', long)]
+        aws_id: String,
+
+        /// S3 secret access Key. Leave unspecified to use host defaults.
+        #[arg(short = 'k', long)]
+        aws_key: String,
+
+        /// TiKV placement driver address: '{host}:{port}'.
+        #[arg(short, long)]
+        pd_host_and_port: String,
+    },
+    /// Just print the tags.
+    Tags,
 }
 
 #[derive(Serialize, Valuable)]
@@ -92,10 +166,32 @@ fn main() -> Result<(), Report> {
             info!(target: "match_attempt_results", tag = check.1.as_value(), when = next_when.to_rfc3339(), matched = diff.num_seconds().abs() < args.lag_window_in_minutes);
         }
     }
+    let tag_set_string = serde_json::to_string(&TagSet { tag_set: tags })?;
+    info!(tag_set_string);
 
-    let output = serde_json::to_string(&TagSet { tag_set: tags })?;
-    info!(output);
-    print!("{}", output);
+    match args.command {
+        Commands::Surrealdb {bin_path, bucket_name, aws_endpoint, aws_id, aws_key, namespace, database, address, password } => {
+            // Check for S3 override parameters, ie- MinIO.
+            let s3_endpoint = if aws_endpoint.trim().is_empty() || aws_id.trim().is_empty() || aws_key.trim().is_empty() { 
+                None 
+            } else { Some((aws_endpoint, aws_id, aws_key))};
+            // Command::new will thow if the required binaries do not exist.
+            let command_output = surrealdb_backup(now, bin_path, bucket_name, namespace, database, address, password, tag_set_string, s3_endpoint)?;
+            info!(target: "surrealdb_backup_output", success=command_output.status.success(), exit_code=command_output.status.code().or(Some(0)), stdout=String::from_utf8(command_output.stdout)?, stderr=String::from_utf8(command_output.stderr)?);
+        }
+        Commands::Tikv {bin_path, bucket_name, aws_endpoint, aws_id, aws_key, pd_host_and_port } => {
+            // Check for S3 override parameters, ie- MinIO.
+            let s3_endpoint = if aws_endpoint.trim().is_empty() || aws_id.trim().is_empty() || aws_key.trim().is_empty() { 
+                None 
+            } else { Some((aws_endpoint, aws_id, aws_key))};
+            // Command::new will thow if the required binaries do not exist.
+            let command_output = tikv_backup(now, bin_path, bucket_name, pd_host_and_port, tag_set_string, s3_endpoint)?;
+            info!(target: "tikv_backup_output", success=command_output.status.success(), exit_code=command_output.status.code().or(Some(0)), stdout=String::from_utf8(command_output.stdout)?, stderr=String::from_utf8(command_output.stderr)?);
+        }
+        Commands::Tags => {
+            print!("{}", tag_set_string);
+        }
+    }
     Ok(())
 }
 
@@ -304,7 +400,7 @@ fn surrealdb_backup(
     tags: String,
     s3_endpoint: Option<(String, String, String)>,
 ) -> Result<Output, Report> {
-    let storage_key = format!("surrealdb/{}/{}", namespace, time.format("+%Y-%m-%d.%H-%M"));
+    let storage_key = format!("surrealdb/{}/{}.zst", namespace, time.format("+%Y-%m-%d.%H-%M"));
     // KEY=surrealdb/$NS/${ds}.zst
 
     let surrealdb_command_output = Command::new(format!("{}/bin/surreal", bin_path))
