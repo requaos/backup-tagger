@@ -30,6 +30,10 @@ struct Args {
     #[arg(short, long, default_value_t = 20, global=true)]
     lag_window_in_minutes: i64,
 
+    /// Storage key timestamp format string
+    #[arg(short, long, default_value_t = String::from("+%Y-%m-%d.%H-%M"), global=true)]
+    format_timestamp: String,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -176,7 +180,7 @@ fn main() -> Result<(), Report> {
                 None 
             } else { Some((aws_endpoint, aws_id, aws_key))};
             // Command::new will thow if the required binaries do not exist.
-            let command_output = surrealdb_backup(now, bin_path, bucket_name, namespace, database, address, password, tag_set_string, s3_endpoint)?;
+            let command_output = surrealdb_backup(now, bin_path, bucket_name, namespace, database, address, password, tag_set_string, s3_endpoint, args.format_timestamp)?;
             info!(target: "surrealdb_backup_output", success=command_output.status.success(), exit_code=command_output.status.code().or(Some(0)), stdout=String::from_utf8(command_output.stdout)?, stderr=String::from_utf8(command_output.stderr)?);
         }
         Commands::Tikv {bin_path, bucket_name, aws_endpoint, aws_id, aws_key, pd_host_and_port } => {
@@ -185,7 +189,7 @@ fn main() -> Result<(), Report> {
                 None 
             } else { Some((aws_endpoint, aws_id, aws_key))};
             // Command::new will thow if the required binaries do not exist.
-            let command_output = tikv_backup(now, bin_path, bucket_name, pd_host_and_port, tag_set_string, s3_endpoint)?;
+            let command_output = tikv_backup(now, bin_path, bucket_name, pd_host_and_port, tag_set_string, s3_endpoint, args.format_timestamp)?;
             info!(target: "tikv_backup_output", success=command_output.status.success(), exit_code=command_output.status.code().or(Some(0)), stdout=String::from_utf8(command_output.stdout)?, stderr=String::from_utf8(command_output.stderr)?);
         }
         Commands::Tags => {
@@ -286,23 +290,6 @@ struct Object {
     key: String,
 }
 
-fn tikv_backup_with_defaults(
-    time: DateTime<Utc>,
-    bin_path: String,
-    bucket_name: String,
-    tags: String,
-    s3_endpoint: Option<(String, String, String)>,
-) -> Result<Output, Report> {
-    return tikv_backup(
-        time,
-        bin_path,
-        bucket_name,
-        String::from("tidb-cluster-pd.tidb-admin:2379"),
-        tags,
-        s3_endpoint,
-    );
-}
-
 fn tikv_backup(
     time: DateTime<Utc>,
     bin_path: String,
@@ -310,8 +297,9 @@ fn tikv_backup(
     pd_host_and_port: String,
     tags: String,
     s3_endpoint: Option<(String, String, String)>,
+    format_string: String,
 ) -> Result<Output, Report> {
-    let storage_key = format!("tikv/{}", time.format("+%Y-%m-%d.%H-%M"));
+    let storage_key = format!("tikv/{}", time.format(format_string.as_str()));
     // Existing values:
     // tikv-br backup raw --pd=tidb-cluster-pd.tidb-admin:2379 --send-credentials-to-tikv=false
     let mut aws_command = Command::new(format!("{}/bin/aws", bin_path));
@@ -399,8 +387,9 @@ fn surrealdb_backup(
     password: String,
     tags: String,
     s3_endpoint: Option<(String, String, String)>,
+    format_string: String,
 ) -> Result<Output, Report> {
-    let storage_key = format!("surrealdb/{}/{}.zst", namespace, time.format("+%Y-%m-%d.%H-%M"));
+    let storage_key = format!("surrealdb/{}/{}.zst", namespace, time.format(format_string.as_str()));
     // KEY=surrealdb/$NS/${ds}.zst
 
     let surrealdb_command_output = Command::new(format!("{}/bin/surreal", bin_path))
