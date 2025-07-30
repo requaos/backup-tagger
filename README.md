@@ -3,7 +3,7 @@
 Tags are calculated for the follwing periods, given these input parameters:
 
 ```shell
-btagger --every-n-hours 4 --minutes-offset 30 --lag-window-in-minutes 20
+btagger tags --every-n-hours 4 --minutes-offset 30 --lag-window-in-minutes 20
 ```
 
 ##### All time calculations are performed in UTC

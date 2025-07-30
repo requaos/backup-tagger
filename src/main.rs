@@ -34,6 +34,10 @@ struct Args {
     #[arg(short, long, default_value_t = String::from("+%Y-%m-%d.%H-%M"), global=true)]
     format_timestamp: String,
 
+    /// Path containing 'bin/aws', 'bin/zstd', 'bin/surreal' and 'bin/tikv-br'.
+    #[arg(short, long, default_value_t = String::from("/"))]
+    bin_path: String,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -42,10 +46,6 @@ struct Args {
 enum Commands {
     /// SurrealDB backup command.
     Surrealdb {
-        /// Path containing 'bin/aws', 'bin/zstd' and 'bin/surreal'.
-        #[arg(short, long)]
-        bin_path: String,
-
         /// Backup target bucket name.
         #[arg(short = 'B', long)]
         bucket_name: String,
@@ -80,10 +80,6 @@ enum Commands {
     },
     /// TiKV backup command.
     Tikv {
-        /// Path containing 'bin/aws' and 'bin/tikv-br'.
-        #[arg(short, long)]
-        bin_path: String,
-
         /// Backup target bucket name.
         #[arg(short = 'B', long)]
         bucket_name: String,
@@ -174,22 +170,22 @@ fn main() -> Result<(), Report> {
     info!(tag_set_string);
 
     match args.command {
-        Commands::Surrealdb {bin_path, bucket_name, aws_endpoint, aws_id, aws_key, namespace, database, address, password } => {
+        Commands::Surrealdb {bucket_name, aws_endpoint, aws_id, aws_key, namespace, database, address, password } => {
             // Check for S3 override parameters, ie- MinIO.
             let s3_endpoint = if aws_endpoint.trim().is_empty() || aws_id.trim().is_empty() || aws_key.trim().is_empty() { 
                 None 
             } else { Some((aws_endpoint, aws_id, aws_key))};
             // Command::new will thow if the required binaries do not exist.
-            let command_output = surrealdb_backup(now, bin_path, bucket_name, namespace, database, address, password, tag_set_string, s3_endpoint, args.format_timestamp)?;
+            let command_output = surrealdb_backup(now, args.bin_path, bucket_name, namespace, database, address, password, tag_set_string, s3_endpoint, args.format_timestamp)?;
             info!(target: "surrealdb_backup_output", success=command_output.status.success(), exit_code=command_output.status.code().or(Some(0)), stdout=String::from_utf8(command_output.stdout)?, stderr=String::from_utf8(command_output.stderr)?);
         }
-        Commands::Tikv {bin_path, bucket_name, aws_endpoint, aws_id, aws_key, pd_host_and_port } => {
+        Commands::Tikv {bucket_name, aws_endpoint, aws_id, aws_key, pd_host_and_port } => {
             // Check for S3 override parameters, ie- MinIO.
             let s3_endpoint = if aws_endpoint.trim().is_empty() || aws_id.trim().is_empty() || aws_key.trim().is_empty() { 
                 None 
             } else { Some((aws_endpoint, aws_id, aws_key))};
             // Command::new will thow if the required binaries do not exist.
-            let command_output = tikv_backup(now, bin_path, bucket_name, pd_host_and_port, tag_set_string, s3_endpoint, args.format_timestamp)?;
+            let command_output = tikv_backup(now, args.bin_path, bucket_name, pd_host_and_port, tag_set_string, s3_endpoint, args.format_timestamp)?;
             info!(target: "tikv_backup_output", success=command_output.status.success(), exit_code=command_output.status.code().or(Some(0)), stdout=String::from_utf8(command_output.stdout)?, stderr=String::from_utf8(command_output.stderr)?);
         }
         Commands::Tags => {
