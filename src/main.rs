@@ -342,10 +342,10 @@ fn tikv_backup(
     };
     // TODO: list all the files that were pushed up by the distributed backup command.
     // LIST_RESP=`${nixpkgs.awscli}/bin/aws s3api list-objects --bucket ${backupBucket} --prefix $KEY --output json`
+    let list_response = String::from_utf8(s3_command_output.stdout)?;
+    info!("{}", list_response);
 
-    let list_object_result = serde_json::from_str::<ListObjectResult>(
-        String::from_utf8(s3_command_output.stdout)?.as_str(),
-    )?;
+    let list_object_result = serde_json::from_str::<ListObjectResult>(list_response.as_str())?;
     let object_keys = list_object_result
         .contents
         .iter()
@@ -468,6 +468,7 @@ fn surrealdb_backup(
             .output()
             .wrap_err("failed to execute process")?
     };
+    info!("{}", String::from_utf8(_s3_command_output.stdout)?);
     // ${nixpkgs.awscli}/bin/aws s3api put-object-tagging \
     // --bucket ${backupBucket} \
     // --tagging "{\"TagSet\":[{\"Key\":\"thirdofhalfday\",\"Value\":\"1\"}$TAGS]}" \
@@ -482,7 +483,7 @@ fn install_tracing() {
 
     let fmt_layer = fmt::layer().with_writer(|| std::io::stderr()).with_target(false);
     let filter_layer = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("error"))
+        .or_else(|_| EnvFilter::try_new("info"))
         .unwrap();
 
     tracing_subscriber::registry()
