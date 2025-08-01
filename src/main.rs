@@ -308,17 +308,26 @@ fn tikv_backup(
     }
     // We want to pass in the TiKV PD address and port
     // may need to pass endpoint address like this: --s3.endpoint http://xxx
-    let tikv_br_command_result = Command::new(format!("{}/bin/tikv-br", bin_path))
-        .arg("backup")
-        .arg("raw")
-        .arg(format!("--pd={}", pd_host_and_port))
-        .arg(format!("--send-credentials-to-tikv={}", endpoint_is_some))
-        .arg(if endpoint_is_some {
-            format!("--storage=s3://{}/{}?access-key={}&secret-access-key={}&endpoint={}", bucket_name, storage_key, aws_id, aws_key, aws_endpoint)
+    let tikv_br_command_result = if endpoint_is_some {
+        Command::new(format!("{}/bin/tikv-br", bin_path))
+            .arg("backup")
+            .arg("raw")
+            .arg(format!("--pd={}", pd_host_and_port))
+            .arg(format!("--send-credentials-to-tikv={}", endpoint_is_some))
+            .arg(format!("--s3.endpoint={}", aws_endpoint))
+            .arg(format!("--storage=s3://{}/{}?access-key={}&secret-access-key={}", bucket_name, storage_key, aws_id, aws_key))
+            .output()
+            .wrap_err("failed to execute process")?
         } else {
-            format!("--storage=s3://{}/{}", bucket_name, storage_key)})
-        .output()
-        .wrap_err("failed to execute process")?;
+        Command::new(format!("{}/bin/tikv-br", bin_path))
+            .arg("backup")
+            .arg("raw")
+            .arg(format!("--pd={}", pd_host_and_port))
+            .arg(format!("--send-credentials-to-tikv={}", endpoint_is_some))
+            .arg(format!("--storage=s3://{}/{}", bucket_name, storage_key))
+            .output()
+            .wrap_err("failed to execute process")?
+        };
     
     let tikv_br_stdout = String::from_utf8(tikv_br_command_result.stdout)?;
     info!(target: "tikv_backup_output", success=tikv_br_command_result.status.success(), exit_code=tikv_br_command_result.status.code().or(Some(0)), stdout=tikv_br_stdout, stderr=String::from_utf8(tikv_br_command_result.stderr)?);
