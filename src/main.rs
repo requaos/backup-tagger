@@ -338,9 +338,9 @@ fn tikv_backup(
             .env("AWS_SECRET_ACCESS_KEY", aws_key)
             .arg("s3api")
             .arg("list-objects")
-            .arg(format!("--endpoint-url {}", aws_endpoint))
-            .arg(format!("--bucket {}", bucket_name))
-            .arg(format!("--prefix {}", storage_key))
+            .arg("--endpoint-url").arg(&aws_endpoint)
+            .arg("--bucket").arg(&bucket_name)
+            .arg("--prefix").arg(&storage_key)
             .arg("--output json")
             .output()
             .wrap_err("failed to execute process")?
@@ -348,8 +348,8 @@ fn tikv_backup(
         aws_command
             .arg("s3api")
             .arg("list-objects")
-            .arg(format!("--bucket {}", bucket_name))
-            .arg(format!("--prefix {}", storage_key))
+            .arg("--bucket").arg(&bucket_name)
+            .arg("--prefix").arg(&storage_key)
             .arg("--output json")
             .output()
             .wrap_err("failed to execute process")?
@@ -372,9 +372,9 @@ fn tikv_backup(
         let _s3_command_output = aws_command
             .arg("s3api")
             .arg("put-object-tagging")
-            .arg(format!("--bucket {}", bucket_name))
-            .arg(format!("--tagging {}", tags))
-            .arg(format!("--key {}", key))
+            .arg("--bucket").arg(&bucket_name)
+            .arg("--tagging").arg(&tags)
+            .arg("--key").arg(&key)
             .output()
             .wrap_err("failed to execute process")?;
         info!(target: "aws_put_object_tagging_output", key=key, success=_s3_command_output.status.success(), exit_code=_s3_command_output.status.code().or(Some(0)), stdout=String::from_utf8(_s3_command_output.stdout)?, stderr=String::from_utf8(_s3_command_output.stderr)?);
@@ -400,18 +400,18 @@ fn surrealdb_backup(
     s3_endpoint: Option<(String, String, String)>,
     format_string: String,
 ) -> Result<Output, Report> {
-    let storage_key = format!("surrealdb/{}/{}.zst", namespace, time.format(format_string.as_str()));
+    let time_part = time.format(format_string.as_str()).to_string().replace("+", "");
+    let storage_key = format!("surrealdb/{}/{}.zst", namespace, time_part);
     // KEY=surrealdb/$NS/${ds}.zst
 
     let surrealdb_command_output = Command::new(format!("{}/bin/surreal", bin_path))
         .arg("export")
-        .arg(format!("-e http://{}", address))
-        .arg("-u root")
-        .arg(format!("-p {}", password))
-        .arg(format!("--namespace {}", namespace))
-        .arg(format!("--database {}", database))
-        .arg("-")
-        .stdout(Stdio::piped())
+        .arg("-e").arg(format!("http://{}", address))
+        .arg("-u").arg("root")
+        .arg("-p").arg(password)
+        .arg("--namespace").arg(namespace)
+        .arg("--database").arg(database)
+        .arg("-").stdout(Stdio::piped())
         .spawn()
         .wrap_err("failed to execute process")?;
     let zstd_command_output = Command::new(format!("{}/bin/zstd", bin_path))
@@ -442,7 +442,7 @@ fn surrealdb_backup(
             .stdin(zstd_command_output.stdout.unwrap())
             .arg("s3")
             .arg("cp")
-            .arg(format!("--endpoint-url {}", aws_endpoint.clone()))
+            .arg("--endpoint-url").arg(aws_endpoint.clone())
             .arg("-")
             .arg(format!("s3://{}/{}", bucket_name, storage_key))
             .output()
@@ -467,19 +467,19 @@ fn surrealdb_backup(
             .env("AWS_SECRET_ACCESS_KEY", aws_key.clone())
             .arg("s3api")
             .arg("put-object-tagging")
-            .arg(format!("--endpoint-url {}", aws_endpoint.clone()))
-            .arg(format!("--bucket {}", bucket_name))
-            .arg(format!("--tagging {}", tags))
-            .arg(format!("--key {}", storage_key))
+            .arg("--endpoint-url").arg(aws_endpoint.clone())
+            .arg("--bucket").arg(bucket_name)
+            .arg("--tagging").arg(tags)
+            .arg("--key").arg(storage_key)
             .output()
             .wrap_err("failed to execute process")?
     } else {
         aws_command
             .arg("s3api")
             .arg("put-object-tagging")
-            .arg(format!("--bucket {}", bucket_name))
-            .arg(format!("--tagging {}", tags))
-            .arg(format!("--key {}", storage_key))
+            .arg("--bucket").arg(bucket_name)
+            .arg("--tagging").arg(tags)
+            .arg("--key").arg(storage_key)
             .output()
             .wrap_err("failed to execute process")?
     };
