@@ -1,9 +1,10 @@
 use chrono::{DateTime, Duration, Utc};
-use clap::{command, Parser, Subcommand};
+use clap::{command, error, Parser, Subcommand};
 use color_eyre::eyre::{ContextCompat, Result};
 use color_eyre::{eyre::Report, eyre::WrapErr, Section};
 use cron_parser::parse;
 use serde::{Deserialize, Serialize};
+use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Output, Stdio};
 use tracing::{info, instrument};
 use valuable::Valuable;
@@ -306,6 +307,42 @@ fn tikv_backup(
         aws_id = s3_endpoint.1;
         aws_key = s3_endpoint.2;
     }
+    let _s3_create_bucket_command_output = if endpoint_is_some {
+        aws_command
+            .env("AWS_ACCESS_KEY_ID", aws_id)
+            .env("AWS_SECRET_ACCESS_KEY", aws_key)
+            .arg("s3api")
+            .arg("create-bucket")
+            .arg("--endpoint-url").arg(&aws_endpoint)
+            .arg("--bucket").arg(&bucket_name)
+            .arg("--output json")
+            .output()
+            .unwrap_or_else(|err| {
+                info!("Error executing command: {}", err);
+                // Return a default or empty Output struct to continue
+                std::process::Output {
+                    status: std::process::ExitStatus::from_raw(1), // Example error status
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                }
+            })
+    } else {
+        aws_command
+            .arg("s3api")
+            .arg("create-bucket")
+            .arg("--bucket").arg(&bucket_name)
+            .arg("--output json")
+            .output()
+            .unwrap_or_else(|err| {
+                info!("Error executing command: {}", err);
+                // Return a default or empty Output struct to continue
+                std::process::Output {
+                    status: std::process::ExitStatus::from_raw(1), // Example error status
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                }
+            })
+    };
     // We want to pass in the TiKV PD address and port
     // may need to pass endpoint address like this: --s3.endpoint http://xxx
     let tikv_br_command_result = if endpoint_is_some {
@@ -400,6 +437,53 @@ fn surrealdb_backup(
     s3_endpoint: Option<(String, String, String)>,
     format_string: String,
 ) -> Result<Output, Report> {
+    let mut aws_command = Command::new(format!("{}/bin/aws", bin_path));
+    let endpoint_is_some = s3_endpoint.is_some();
+    let mut aws_endpoint: String = String::new();
+    let mut aws_id: String = String::new();
+    let mut aws_key: String = String::new();
+    if let Some(s3_endpoint) = s3_endpoint {
+        aws_endpoint = s3_endpoint.0;
+        aws_id = s3_endpoint.1;
+        aws_key = s3_endpoint.2;
+    }
+    // Create bucket if not exists, ignore errors.
+    let _s3_create_bucket_command_output = if endpoint_is_some {
+        aws_command
+            .env("AWS_ACCESS_KEY_ID", aws_id)
+            .env("AWS_SECRET_ACCESS_KEY", aws_key)
+            .arg("s3api")
+            .arg("create-bucket")
+            .arg("--endpoint-url").arg(&aws_endpoint)
+            .arg("--bucket").arg(&bucket_name)
+            .arg("--output json")
+            .output()
+            .unwrap_or_else(|err| {
+                info!("Error executing command: {}", err);
+                // Return a default or empty Output struct to continue
+                std::process::Output {
+                    status: std::process::ExitStatus::from_raw(1), // Example error status
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                }
+            })
+    } else {
+        aws_command
+            .arg("s3api")
+            .arg("create-bucket")
+            .arg("--bucket").arg(&bucket_name)
+            .arg("--output json")
+            .output()
+            .unwrap_or_else(|err| {
+                info!("Error executing command: {}", err);
+                // Return a default or empty Output struct to continue
+                std::process::Output {
+                    status: std::process::ExitStatus::from_raw(1), // Example error status
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                }
+            })
+    };
     let time_part = time.format(format_string.as_str()).to_string().replace("+", "");
     let storage_key = format!("surrealdb/{}/{}.zst", namespace, time_part);
     // KEY=surrealdb/$NS/${ds}.zst
@@ -425,16 +509,6 @@ fn surrealdb_backup(
         .spawn()
         .wrap_err("failed to execute process")?;
 
-    let mut aws_command = Command::new(format!("{}/bin/aws", bin_path));
-    let endpoint_is_some = s3_endpoint.is_some();
-    let mut aws_endpoint: String = String::new();
-    let mut aws_id: String = String::new();
-    let mut aws_key: String = String::new();
-    if let Some(s3_endpoint) = s3_endpoint {
-        aws_endpoint = s3_endpoint.0;
-        aws_id = s3_endpoint.1;
-        aws_key = s3_endpoint.2;
-    }
     let s3_cp_command_output = if endpoint_is_some {
         aws_command
             .env("AWS_ACCESS_KEY_ID", aws_id.clone())
