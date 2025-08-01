@@ -1,10 +1,9 @@
 use chrono::{DateTime, Duration, Utc};
-use clap::{command, error, Parser, Subcommand};
+use clap::{command, Parser, Subcommand};
 use color_eyre::eyre::{ContextCompat, Result};
 use color_eyre::{eyre::Report, eyre::WrapErr, Section};
 use cron_parser::parse;
 use serde::{Deserialize, Serialize};
-use std::io::Read;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Output, Stdio};
 use tracing::{info, instrument};
