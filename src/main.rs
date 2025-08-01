@@ -298,7 +298,6 @@ fn tikv_backup(
     let storage_key = format!("tikv/{}", time.format(format_string.as_str()));
     // Existing values:
     // tikv-br backup raw --pd=tidb-cluster-pd.tidb-admin:2379 --send-credentials-to-tikv=false
-    let mut aws_command = Command::new(format!("{}/bin/aws", bin_path));
     let endpoint_is_some = s3_endpoint.is_some();
     let mut aws_endpoint: String = String::new();
     let mut aws_id: String = String::new();
@@ -309,7 +308,7 @@ fn tikv_backup(
         aws_key = s3_endpoint.2;
     }
     let _s3_create_bucket_command_output = if endpoint_is_some {
-        aws_command
+        Command::new(format!("{}/bin/aws", bin_path))
             .env("AWS_ACCESS_KEY_ID", &aws_id)
             .env("AWS_SECRET_ACCESS_KEY", &aws_key)
             .arg("s3api")
@@ -328,7 +327,7 @@ fn tikv_backup(
                 }
             })
     } else {
-        aws_command
+        Command::new(format!("{}/bin/aws", bin_path))
             .arg("s3api")
             .arg("create-bucket")
             .arg("--bucket").arg(&bucket_name)
@@ -371,7 +370,7 @@ fn tikv_backup(
     info!(target: "tikv_backup_output", success=tikv_br_command_result.status.success(), exit_code=tikv_br_command_result.status.code().or(Some(0)), stdout=tikv_br_stdout, stderr=String::from_utf8(tikv_br_command_result.stderr)?);
 
     let s3_command_output = if endpoint_is_some {
-        aws_command
+        Command::new(format!("{}/bin/aws", bin_path))
             .env("AWS_ACCESS_KEY_ID", &aws_id)
             .env("AWS_SECRET_ACCESS_KEY", &aws_key)
             .arg("s3api")
@@ -383,7 +382,7 @@ fn tikv_backup(
             .output()
             .wrap_err("failed to execute process")?
     } else {
-        aws_command
+        Command::new(format!("{}/bin/aws", bin_path))
             .arg("s3api")
             .arg("list-objects")
             .arg("--bucket").arg(&bucket_name)
@@ -407,7 +406,7 @@ fn tikv_backup(
     // ${echo} $KEYS | ${nixpkgs.uutils-coreutils-noprefix}/bin/tr " " "\n"
 
     for key in object_keys {
-        let _s3_command_output = aws_command
+        let _s3_command_output = Command::new(format!("{}/bin/aws", bin_path))
             .arg("s3api")
             .arg("put-object-tagging")
             .arg("--bucket").arg(&bucket_name)
@@ -438,7 +437,6 @@ fn surrealdb_backup(
     s3_endpoint: Option<(String, String, String)>,
     format_string: String,
 ) -> Result<Output, Report> {
-    let mut aws_command = Command::new(format!("{}/bin/aws", bin_path));
     let endpoint_is_some = s3_endpoint.is_some();
     let mut aws_endpoint: String = String::new();
     let mut aws_id: String = String::new();
@@ -450,7 +448,7 @@ fn surrealdb_backup(
     }
     // Create bucket if not exists, ignore errors.
     let _s3_create_bucket_command_output = if endpoint_is_some {
-        aws_command
+        Command::new(format!("{}/bin/aws", bin_path))
             .env("AWS_ACCESS_KEY_ID", &aws_id)
             .env("AWS_SECRET_ACCESS_KEY", &aws_key)
             .arg("s3api")
@@ -469,7 +467,7 @@ fn surrealdb_backup(
                 }
             })
     } else {
-        aws_command
+        Command::new(format!("{}/bin/aws", bin_path))
             .arg("s3api")
             .arg("create-bucket")
             .arg("--bucket").arg(&bucket_name)
@@ -490,7 +488,7 @@ fn surrealdb_backup(
     // KEY=surrealdb/$NS/${ds}.zst
 
     let mut s3_cp_command_output = if endpoint_is_some {
-        aws_command
+        Command::new(format!("{}/bin/aws", bin_path))
             .env("AWS_ACCESS_KEY_ID", aws_id.clone())
             .env("AWS_SECRET_ACCESS_KEY", aws_key.clone())
             .stdin(Stdio::piped())
@@ -502,7 +500,7 @@ fn surrealdb_backup(
             .spawn()
             .wrap_err("failed to execute process")
     } else {
-        aws_command
+        Command::new(format!("{}/bin/aws", bin_path))
             .stdin(Stdio::piped())
             .arg("s3")
             .arg("cp")
@@ -538,7 +536,7 @@ fn surrealdb_backup(
     // | ${nixpkgs.awscli}/bin/aws s3 cp - s3://${backupBucket}/$KEY
 
     let _s3_command_output = if endpoint_is_some {
-        aws_command
+        Command::new(format!("{}/bin/aws", bin_path))
             .env("AWS_ACCESS_KEY_ID", aws_id.clone())
             .env("AWS_SECRET_ACCESS_KEY", aws_key.clone())
             .arg("s3api")
@@ -550,7 +548,7 @@ fn surrealdb_backup(
             .output()
             .wrap_err("failed to execute process")?
     } else {
-        aws_command
+        Command::new(format!("{}/bin/aws", bin_path))
             .arg("s3api")
             .arg("put-object-tagging")
             .arg("--bucket").arg(bucket_name)
