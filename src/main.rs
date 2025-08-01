@@ -1,10 +1,9 @@
 use chrono::{DateTime, Duration, Utc};
-use clap::{command, Arg, Parser, Subcommand};
+use clap::{command, Parser, Subcommand};
 use color_eyre::eyre::{ContextCompat, Result};
 use color_eyre::{eyre::Report, eyre::WrapErr, Section};
 use cron_parser::parse;
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::process::{Command, Output, Stdio};
 use tracing::{info, instrument};
 use valuable::Valuable;
@@ -185,8 +184,7 @@ fn main() -> Result<(), Report> {
                 None 
             } else { Some((aws_endpoint, aws_id, aws_key))};
             // Command::new will thow if the required binaries do not exist.
-            let command_output = tikv_backup(now, args.bin_path, bucket_name, pd_host_and_port, tag_set_string, s3_endpoint, args.format_timestamp)?;
-            info!(target: "tikv_backup_output", success=command_output.status.success(), exit_code=command_output.status.code().or(Some(0)), stdout=String::from_utf8(command_output.stdout)?, stderr=String::from_utf8(command_output.stderr)?);
+            tikv_backup(now, args.bin_path, bucket_name, pd_host_and_port, tag_set_string, s3_endpoint, args.format_timestamp)?;
         }
         Commands::Tags => {
             print!("{}", tag_set_string);
@@ -294,7 +292,7 @@ fn tikv_backup(
     tags: String,
     s3_endpoint: Option<(String, String, String)>,
     format_string: String,
-) -> Result<Output, Report> {
+) -> Result<String, Report> {
     let storage_key = format!("tikv/{}", time.format(format_string.as_str()));
     // Existing values:
     // tikv-br backup raw --pd=tidb-cluster-pd.tidb-admin:2379 --send-credentials-to-tikv=false
@@ -309,14 +307,21 @@ fn tikv_backup(
         aws_key = s3_endpoint.2;
     }
     // We want to pass in the TiKV PD address and port
+    // may need to pass endpoint address like this: --s3.endpoint http://xxx
     let tikv_br_command_result = Command::new(format!("{}/bin/tikv-br", bin_path))
         .arg("backup")
         .arg("raw")
         .arg(format!("--pd={}", pd_host_and_port))
         .arg(format!("--send-credentials-to-tikv={}", endpoint_is_some))
-        .arg(format!("--storage=s3://${}/{}", bucket_name, storage_key))
+        .arg(if endpoint_is_some {
+            format!("--storage=s3://{}/{}?access-key={}&secret-access-key={}&endpoint={}", bucket_name, storage_key, aws_id, aws_key, aws_endpoint)
+        } else {
+            format!("--storage=s3://{}/{}", bucket_name, storage_key)})
         .output()
-        .wrap_err("failed to execute process");
+        .wrap_err("failed to execute process")?;
+    
+    let tikv_br_stdout = String::from_utf8(tikv_br_command_result.stdout)?;
+    info!(target: "tikv_backup_output", success=tikv_br_command_result.status.success(), exit_code=tikv_br_command_result.status.code().or(Some(0)), stdout=tikv_br_stdout, stderr=String::from_utf8(tikv_br_command_result.stderr)?);
 
     let s3_command_output = if endpoint_is_some {
         aws_command
@@ -342,8 +347,8 @@ fn tikv_backup(
     };
     // TODO: list all the files that were pushed up by the distributed backup command.
     // LIST_RESP=`${nixpkgs.awscli}/bin/aws s3api list-objects --bucket ${backupBucket} --prefix $KEY --output json`
-    let list_response = String::from_utf8(s3_command_output.stdout)?;
-    info!("{}", list_response);
+    let list_response = String::from_utf8(s3_command_output.stdout.clone())?;
+    info!(target: "aws_list_objects_output", success=s3_command_output.status.success(), exit_code=s3_command_output.status.code().or(Some(0)), stdout=list_response, stderr=String::from_utf8(s3_command_output.stderr)?);
 
     let list_object_result = serde_json::from_str::<ListObjectResult>(list_response.as_str())?;
     let object_keys = list_object_result
@@ -362,7 +367,8 @@ fn tikv_backup(
             .arg(format!("--tagging {}", tags))
             .arg(format!("--key {}", key))
             .output()
-            .wrap_err("failed to execute process");
+            .wrap_err("failed to execute process")?;
+        info!(target: "aws_put_object_tagging_output", key=key, success=_s3_command_output.status.success(), exit_code=_s3_command_output.status.code().or(Some(0)), stdout=String::from_utf8(_s3_command_output.stdout)?, stderr=String::from_utf8(_s3_command_output.stderr)?);
     }
     // TODO: Apply tags to all keys returned from list operation.
     // ${nixpkgs.findutils}/bin/xargs -rP 4 -n 1 ${nixpkgs.awscli}/bin/aws s3api put-object-tagging \
@@ -370,7 +376,7 @@ fn tikv_backup(
     // --tagging "{\"TagSet\":[{\"Key\":\"thirdofhalfday\",\"Value\":\"1\"}$TAGS]}" \
     // --key <<< "$KEYS"
 
-    return tikv_br_command_result;
+    return Ok(tikv_br_stdout);
 }
 
 fn surrealdb_backup(
