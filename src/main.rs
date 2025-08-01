@@ -294,7 +294,7 @@ fn tikv_backup(
     s3_endpoint: Option<(String, String, String)>,
     format_string: String,
 ) -> Result<String, Report> {
-    let storage_key = format!("tikv/{}", time.format(format_string.as_str()));
+    let storage_key = format!("tikv/{}", time.format(format_string.as_str()).to_string().replace("+", ""));
     // Existing values:
     // tikv-br backup raw --pd=tidb-cluster-pd.tidb-admin:2379 --send-credentials-to-tikv=false
     let endpoint_is_some = s3_endpoint.is_some();
