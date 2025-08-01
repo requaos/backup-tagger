@@ -405,14 +405,28 @@ fn tikv_backup(
     // ${echo} $KEYS | ${nixpkgs.uutils-coreutils-noprefix}/bin/tr " " "\n"
 
     for key in object_keys {
-        let _s3_command_output = Command::new(format!("{}/bin/aws", bin_path))
-            .arg("s3api")
-            .arg("put-object-tagging")
-            .arg("--bucket").arg(&bucket_name)
-            .arg("--tagging").arg(&tags)
-            .arg("--key").arg(&key)
-            .output()
-            .wrap_err("failed to execute process")?;
+        let _s3_command_output = if endpoint_is_some {
+            Command::new(format!("{}/bin/aws", bin_path))
+                .env("AWS_ACCESS_KEY_ID", &aws_id)
+                .env("AWS_SECRET_ACCESS_KEY", &aws_key)
+                .arg("s3api")
+                .arg("put-object-tagging")
+                .arg("--endpoint-url").arg(&aws_endpoint)
+                .arg("--bucket").arg(&bucket_name)
+                .arg("--tagging").arg(&tags)
+                .arg("--key").arg(&key)
+                .output()
+                .wrap_err("failed to execute process")
+        } else {
+            Command::new(format!("{}/bin/aws", bin_path))
+                .arg("s3api")
+                .arg("put-object-tagging")
+                .arg("--bucket").arg(&bucket_name)
+                .arg("--tagging").arg(&tags)
+                .arg("--key").arg(&key)
+                .output()
+                .wrap_err("failed to execute process")
+        }?;
         info!(target: "aws_put_object_tagging_output", key=key, success=_s3_command_output.status.success(), exit_code=_s3_command_output.status.code().or(Some(0)), stdout=String::from_utf8(_s3_command_output.stdout)?, stderr=String::from_utf8(_s3_command_output.stderr)?);
     }
     // TODO: Apply tags to all keys returned from list operation.
