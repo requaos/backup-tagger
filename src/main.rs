@@ -4,6 +4,7 @@ use color_eyre::eyre::{ContextCompat, Result};
 use color_eyre::{eyre::Report, eyre::WrapErr, Section};
 use cron_parser::parse;
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Output, Stdio};
 use tracing::{info, instrument};
@@ -315,7 +316,7 @@ fn tikv_backup(
             .arg("create-bucket")
             .arg("--endpoint-url").arg(&aws_endpoint)
             .arg("--bucket").arg(&bucket_name)
-            .arg("--output json")
+            .arg("--output").arg("json")
             .output()
             .unwrap_or_else(|err| {
                 info!("Error executing command: {}", err);
@@ -331,7 +332,7 @@ fn tikv_backup(
             .arg("s3api")
             .arg("create-bucket")
             .arg("--bucket").arg(&bucket_name)
-            .arg("--output json")
+            .arg("--output").arg("json")
             .output()
             .unwrap_or_else(|err| {
                 info!("Error executing command: {}", err);
@@ -378,7 +379,7 @@ fn tikv_backup(
             .arg("--endpoint-url").arg(&aws_endpoint)
             .arg("--bucket").arg(&bucket_name)
             .arg("--prefix").arg(&storage_key)
-            .arg("--output json")
+            .arg("--output").arg("json")
             .output()
             .wrap_err("failed to execute process")?
     } else {
@@ -387,7 +388,7 @@ fn tikv_backup(
             .arg("list-objects")
             .arg("--bucket").arg(&bucket_name)
             .arg("--prefix").arg(&storage_key)
-            .arg("--output json")
+            .arg("--output").arg("json")
             .output()
             .wrap_err("failed to execute process")?
     };
@@ -456,7 +457,7 @@ fn surrealdb_backup(
             .arg("create-bucket")
             .arg("--endpoint-url").arg(&aws_endpoint)
             .arg("--bucket").arg(&bucket_name)
-            .arg("--output json")
+            .arg("--output").arg("json")
             .output()
             .unwrap_or_else(|err| {
                 info!("Error executing command: {}", err);
@@ -472,7 +473,7 @@ fn surrealdb_backup(
             .arg("s3api")
             .arg("create-bucket")
             .arg("--bucket").arg(&bucket_name)
-            .arg("--output json")
+            .arg("--output").arg("json")
             .output()
             .unwrap_or_else(|err| {
                 info!("Error executing command: {}", err);
@@ -488,6 +489,38 @@ fn surrealdb_backup(
     let storage_key = format!("surrealdb/{}/{}.zst", namespace, time_part);
     // KEY=surrealdb/$NS/${ds}.zst
 
+    let mut s3_cp_command_output = if endpoint_is_some {
+        aws_command
+            .env("AWS_ACCESS_KEY_ID", aws_id.clone())
+            .env("AWS_SECRET_ACCESS_KEY", aws_key.clone())
+            .stdin(Stdio::piped())
+            .arg("s3")
+            .arg("cp")
+            .arg("--endpoint-url").arg(aws_endpoint.clone())
+            .arg("-")
+            .arg(format!("s3://{}/{}", bucket_name, storage_key))
+            .spawn()
+            .wrap_err("failed to execute process")
+    } else {
+        aws_command
+            .stdin(Stdio::piped())
+            .arg("s3")
+            .arg("cp")
+            .arg("-")
+            .arg(format!("s3://{}/{}", bucket_name, storage_key))
+            .spawn()
+            .wrap_err("failed to execute process")
+    }?;
+    let mut zstd_command_output = Command::new(format!("{}/bin/zstd", bin_path))
+        .stdin(Stdio::piped())
+        .arg("--force")
+        .arg("--stdout")
+        .arg("--adapt")
+        .arg("--rm")
+        .arg("-")
+        .stdout(s3_cp_command_output.stdin.take().wrap_err("failed to pipe")?)
+        .spawn()
+        .wrap_err("failed to execute process")?;
     let surrealdb_command_output = Command::new(format!("{}/bin/surreal", bin_path))
         .arg("export")
         .arg("-e").arg(format!("http://{}", address))
@@ -495,42 +528,11 @@ fn surrealdb_backup(
         .arg("-p").arg(password)
         .arg("--namespace").arg(namespace)
         .arg("--database").arg(database)
-        .arg("-").stdout(Stdio::piped())
+        .arg("-").stdout(zstd_command_output.stdin.take().wrap_err("failed to pipe")?)
         .spawn()
         .wrap_err("failed to execute process")?;
-    let zstd_command_output = Command::new(format!("{}/bin/zstd", bin_path))
-        .stdin(surrealdb_command_output.stdout.unwrap())
-        .arg("--force")
-        .arg("--stdout")
-        .arg("--adapt")
-        .arg("--rm")
-        .arg("-")
-        .stdout(Stdio::piped())
-        .spawn()
-        .wrap_err("failed to execute process")?;
-
-    let s3_cp_command_output = if endpoint_is_some {
-        aws_command
-            .env("AWS_ACCESS_KEY_ID", aws_id.clone())
-            .env("AWS_SECRET_ACCESS_KEY", aws_key.clone())
-            .stdin(zstd_command_output.stdout.unwrap())
-            .arg("s3")
-            .arg("cp")
-            .arg("--endpoint-url").arg(aws_endpoint.clone())
-            .arg("-")
-            .arg(format!("s3://{}/{}", bucket_name, storage_key))
-            .output()
-            .wrap_err("failed to execute process")
-    } else {
-        aws_command
-            .stdin(zstd_command_output.stdout.unwrap())
-            .arg("s3")
-            .arg("cp")
-            .arg("-")
-            .arg(format!("s3://{}/{}", bucket_name, storage_key))
-            .output()
-            .wrap_err("failed to execute process")
-    };
+    let s3_command_output = s3_cp_command_output.wait_with_output().wrap_err("failed to wait for the piped run")?;
+    info!("{}", String::from_utf8(surrealdb_command_output.wait_with_output()?.stderr)?);
     // ${surreal}/bin/surreal export -e http://${surrealdb.address} -u root -p ${surrealdb.password} --namespace $NS --database calamu - \
     // | ${nixpkgs.zstd}/bin/zstd --force --stdout --adapt --rm - \
     // | ${nixpkgs.awscli}/bin/aws s3 cp - s3://${backupBucket}/$KEY
@@ -562,7 +564,7 @@ fn surrealdb_backup(
     // --bucket ${backupBucket} \
     // --tagging "{\"TagSet\":[{\"Key\":\"thirdofhalfday\",\"Value\":\"1\"}$TAGS]}" \
     // --key $KEY
-    return s3_cp_command_output;
+    return Ok(s3_command_output);
 }
 
 fn install_tracing() {
