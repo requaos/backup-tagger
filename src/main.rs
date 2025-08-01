@@ -309,8 +309,8 @@ fn tikv_backup(
     }
     let _s3_create_bucket_command_output = if endpoint_is_some {
         aws_command
-            .env("AWS_ACCESS_KEY_ID", aws_id)
-            .env("AWS_SECRET_ACCESS_KEY", aws_key)
+            .env("AWS_ACCESS_KEY_ID", &aws_id)
+            .env("AWS_SECRET_ACCESS_KEY", &aws_key)
             .arg("s3api")
             .arg("create-bucket")
             .arg("--endpoint-url").arg(&aws_endpoint)
@@ -351,7 +351,7 @@ fn tikv_backup(
             .arg("raw")
             .arg(format!("--pd={}", pd_host_and_port))
             .arg(format!("--send-credentials-to-tikv={}", endpoint_is_some))
-            .arg(format!("--s3.endpoint={}", aws_endpoint))
+            .arg(format!("--s3.endpoint={}", &aws_endpoint))
             .arg(format!("--storage=s3://{}/{}?access-key={}&secret-access-key={}", bucket_name, storage_key, aws_id, aws_key))
             .output()
             .wrap_err("failed to execute process")?
@@ -371,8 +371,8 @@ fn tikv_backup(
 
     let s3_command_output = if endpoint_is_some {
         aws_command
-            .env("AWS_ACCESS_KEY_ID", aws_id)
-            .env("AWS_SECRET_ACCESS_KEY", aws_key)
+            .env("AWS_ACCESS_KEY_ID", &aws_id)
+            .env("AWS_SECRET_ACCESS_KEY", &aws_key)
             .arg("s3api")
             .arg("list-objects")
             .arg("--endpoint-url").arg(&aws_endpoint)
