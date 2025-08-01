@@ -450,8 +450,8 @@ fn surrealdb_backup(
     // Create bucket if not exists, ignore errors.
     let _s3_create_bucket_command_output = if endpoint_is_some {
         aws_command
-            .env("AWS_ACCESS_KEY_ID", aws_id)
-            .env("AWS_SECRET_ACCESS_KEY", aws_key)
+            .env("AWS_ACCESS_KEY_ID", &aws_id)
+            .env("AWS_SECRET_ACCESS_KEY", &aws_key)
             .arg("s3api")
             .arg("create-bucket")
             .arg("--endpoint-url").arg(&aws_endpoint)
